@@ -187,6 +187,20 @@ const chartGrid = document.getElementById("chart-grid");
 const modeBtns = document.querySelectorAll(".mode-btn");
 const toggleSidebarBtn = document.getElementById("toggle-sidebar-btn");
 const themeToggleBtn = document.getElementById("theme-toggle-btn");
+const DATA_BOOT_TIMEOUT_MS = 30000;
+const DATA_BOOT_RETRY_MS = 1000;
+const OPTIONS_DEFAULT_TICKER = "AAPL";
+
+const optionsViewState = {
+    ticker: OPTIONS_DEFAULT_TICKER,
+    selectedExpiry: "",
+    activeTab: "summary",
+    loading: false,
+    error: "",
+    data: null,
+    chart: null,
+    hasLoadedOnce: false
+};
 
 // Add Fade-in Animation Styles
 const viewStyle = document.createElement('style');
@@ -209,6 +223,110 @@ function triggerViewTransition(animate = true) {
     }
 }
 
+function renderDataLoadFailure(reason = "데이터 파일을 찾을 수 없습니다.") {
+    if (chartGrid) {
+        chartGrid.className = "report-view";
+        chartGrid.innerHTML = `
+            <div class="data-error-state">
+                <h2>데이터를 불러오지 못했습니다</h2>
+                <p>${reason}</p>
+                <div class="data-error-actions">
+                    <button type="button" class="mode-btn active" onclick="window.location.reload()">새로고침</button>
+                </div>
+            </div>
+        `;
+    }
+
+    const updatedText = document.getElementById("last-updated-text");
+    const timerText = document.getElementById("refresh-timer");
+    const playbookContainer = document.getElementById("playbook-container");
+    const sentimentContainer = document.getElementById("sentiment-container");
+
+    if (updatedText) {
+        updatedText.textContent = "최근 업데이트: 데이터 없음";
+    }
+    if (timerText) {
+        timerText.textContent = "--:--";
+    }
+    if (playbookContainer) {
+        playbookContainer.innerHTML = `
+            <div class="playbook-card">
+                <div class="playbook-header">
+                    <span class="section-kicker">데이터 상태</span>
+                    <strong>수집 실패</strong>
+                </div>
+                <p class="playbook-summary">현재 세션에서는 데이터 파일이 생성되지 않아 분석 카드가 비활성화되었습니다.</p>
+            </div>
+        `;
+    }
+    if (sentimentContainer) {
+        sentimentContainer.innerHTML = "";
+    }
+}
+
+function appendDataScript({ id = "data-refresh-script", onLoad, onError } = {}) {
+    const oldScript = document.getElementById(id);
+    if (oldScript) oldScript.remove();
+
+    const script = document.createElement("script");
+    script.id = id;
+    script.src = "data.js?t=" + Date.now();
+    script.onload = () => {
+        window.__dashboardDataScriptStatus = "loaded";
+        if (typeof onLoad === "function") onLoad();
+    };
+    script.onerror = () => {
+        window.__dashboardDataScriptStatus = "failed";
+        if (typeof onError === "function") onError();
+    };
+    document.body.appendChild(script);
+}
+
+function bootstrapDashboardData(initData) {
+    if (window.DASHBOARD_DATA) {
+        initData();
+        return;
+    }
+
+    const startedAt = Date.now();
+    let inFlight = false;
+
+    const tryFetch = () => {
+        if (window.DASHBOARD_DATA || inFlight) return;
+        inFlight = true;
+        appendDataScript({
+            id: "data-bootstrap-script",
+            onLoad: () => {
+                inFlight = false;
+                if (window.DASHBOARD_DATA) {
+                    initData();
+                }
+            },
+            onError: () => {
+                inFlight = false;
+            }
+        });
+    };
+
+    tryFetch();
+
+    const retry = setInterval(() => {
+        if (window.DASHBOARD_DATA) {
+            clearInterval(retry);
+            initData();
+            return;
+        }
+
+        if (Date.now() - startedAt >= DATA_BOOT_TIMEOUT_MS) {
+            clearInterval(retry);
+            renderDataLoadFailure("data.js 생성이 지연되고 있습니다. 서버/스크래퍼 상태를 확인한 뒤 새로고침해 주세요.");
+            return;
+        }
+
+        tryFetch();
+    }, DATA_BOOT_RETRY_MS);
+}
+
 document.addEventListener("DOMContentLoaded", () => {
     initTheme();
     loadTickerTape();
@@ -224,16 +342,7 @@ document.addEventListener("DOMContentLoaded", () => {
         triggerViewTransition();
     };
 
-    if (window.DASHBOARD_DATA) {
-        initData();
-    } else {
-        const retry = setInterval(() => {
-            if (window.DASHBOARD_DATA) {
-                initData();
-                clearInterval(retry);
-            }
-        }, 100);
-    }
+    bootstrapDashboardData(initData);
     // Add popover dismissal listeners
     const overlay = document.getElementById('popover-overlay');
     const closeBtn = document.getElementById('close-popover');
@@ -262,16 +371,22 @@ document.addEventListener("DOMContentLoaded", () => {
             modeBtns.forEach(b => b.classList.remove("active"));
             btn.classList.add("active");
             currentMode = btn.dataset.mode;
+            if (currentMode !== "options") {
+                destroyOptionsChart();
+            }
             
             chartGrid.className = ""; // Reset
             if (currentMode === "report") chartGrid.classList.add("report-view");
             if (currentMode === "global") chartGrid.classList.add("global-view");
             if (currentMode === "intel") chartGrid.classList.add("report-view");
+            if (currentMode === "options") chartGrid.classList.add("options-view");
             if (currentMode === "gurus") chartGrid.classList.add("gurus-view");
             if (currentMode === "calendar") chartGrid.classList.add("calendar-view");
             
             if (currentMode === "gurus") {
                 renderGurusView();
+            } else if (currentMode === "options") {
+                renderOptionsView();
             } else if (currentMode === "global") {
                 renderGlobalView();
             } else if (currentMode === "intel") {
@@ -292,8 +407,13 @@ function areStrategyCardsVisible() {
 }
 
 function rerenderCurrentMode(animate = true) {
+    if (currentMode !== "options") {
+        destroyOptionsChart();
+    }
     if (currentMode === "gurus") {
         renderGurusView();
+    } else if (currentMode === "options") {
+        renderOptionsView();
     } else if (currentMode === "global") {
         renderGlobalView();
     } else if (currentMode === "intel") {
@@ -362,21 +482,26 @@ function startAutoRefresh(seconds) {
 }
 
 function refreshDataSilently() {
-    const oldScript = document.getElementById('data-refresh-script');
-    if (oldScript) oldScript.remove();
-
-    const script = document.createElement('script');
-    script.id = 'data-refresh-script';
-    script.src = 'data.js?t=' + Date.now();
-    script.onload = () => {
-        // Update all UI components silently
-        saveNotes();
-        rerenderCurrentMode(false); // false = no animation
-        renderSentiment();
-        renderPlaybookSidebar();
-        console.log("Data refreshed silently at " + new Date().toLocaleTimeString());
-    };
-    document.body.appendChild(script);
+    appendDataScript({
+        id: "data-refresh-script",
+        onLoad: () => {
+            // Optional legacy hook
+            if (typeof saveNotes === "function") {
+                saveNotes();
+            }
+            if (!window.DASHBOARD_DATA) {
+                renderDataLoadFailure("data.js를 읽었지만 유효한 데이터 객체가 없습니다.");
+                return;
+            }
+            rerenderCurrentMode(false); // false = no animation
+            renderSentiment();
+            renderPlaybookSidebar();
+            console.log("Data refreshed silently at " + new Date().toLocaleTimeString());
+        },
+        onError: () => {
+            renderDataLoadFailure("자동 새로고침 중 data.js 로드에 실패했습니다.");
+        }
+    });
 }
 
 function initTheme() {
@@ -565,6 +690,347 @@ function loadCategory(cat) {
     }
 }
 
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+}
+
+function destroyOptionsChart() {
+    if (optionsViewState.chart) {
+        optionsViewState.chart.destroy();
+        optionsViewState.chart = null;
+    }
+}
+
+function getOptionsPcrDescriptor(pcrValue) {
+    if (!Number.isFinite(pcrValue)) {
+        return {
+            badge: "데이터 없음",
+            badgeClass: "options-badge-neutral",
+            summaryHtml: "풋/콜 비율을 계산할 데이터가 충분하지 않습니다."
+        };
+    }
+    if (pcrValue >= 1.0) {
+        return {
+            badge: "극도의 공포 (Bearish)",
+            badgeClass: "options-badge-negative",
+            summaryHtml: "시장에 하락(풋)에 베팅하는 물량이 더 많습니다.<br>하지만 역발상 관점에서는 바닥 신호가 될 수 있습니다."
+        };
+    }
+    if (pcrValue <= 0.7) {
+        return {
+            badge: "극도의 낙관 (Bullish)",
+            badgeClass: "options-badge-positive",
+            summaryHtml: "시장에 상승(콜) 베팅이 압도적으로 많습니다.<br>낙관이 과도한 단기 고점 구간일 가능성을 함께 확인해야 합니다."
+        };
+    }
+    return {
+        badge: "중립",
+        badgeClass: "options-badge-neutral",
+        summaryHtml: "상승/하락 베팅이 비교적 균형 상태입니다.<br>방향성보다 변동성 확대 여부를 우선 점검하세요."
+    };
+}
+
+function getOptionsDisparityClass(disparity) {
+    if (!Number.isFinite(disparity)) return "options-badge-neutral";
+    if (disparity > 0) return "options-badge-positive";
+    if (disparity < 0) return "options-badge-negative";
+    return "options-badge-neutral";
+}
+
+async function fetchOptionsData(ticker, expiry = "") {
+    const isFileProtocol = window.location.protocol === "file:";
+    const apiBase = isFileProtocol ? "http://localhost:8080" : "";
+
+    const cleanTicker = String(ticker || "").trim().toUpperCase();
+    if (!cleanTicker) {
+        optionsViewState.error = "티커를 입력해 주세요.";
+        optionsViewState.loading = false;
+        renderOptionsView();
+        return;
+    }
+
+    optionsViewState.loading = true;
+    optionsViewState.error = "";
+    optionsViewState.ticker = cleanTicker;
+    if (!expiry) {
+        optionsViewState.selectedExpiry = "";
+    }
+    destroyOptionsChart();
+    renderOptionsView();
+
+    try {
+        const params = new URLSearchParams({ ticker: cleanTicker });
+        if (expiry) params.set("expiry", expiry);
+        const res = await fetch(`${apiBase}/api/maxpain?${params.toString()}`);
+        const data = await res.json();
+
+        if (!res.ok) {
+            throw new Error(data.error || `옵션 데이터 조회 실패 (${res.status})`);
+        }
+
+        optionsViewState.data = data;
+        optionsViewState.loading = false;
+        optionsViewState.error = "";
+        optionsViewState.hasLoadedOnce = true;
+        optionsViewState.ticker = data.ticker || cleanTicker;
+        optionsViewState.selectedExpiry = data.expiry_date || "";
+        renderOptionsView();
+    } catch (err) {
+        optionsViewState.loading = false;
+        if (isFileProtocol) {
+            optionsViewState.error = "옵션 API에 연결하지 못했습니다. `python3 server.py` 실행 후 `http://localhost:8080`으로 접속하거나, 서버 실행 상태에서 다시 조회해 주세요.";
+        } else {
+            optionsViewState.error = err?.message || "옵션 데이터를 불러오지 못했습니다.";
+        }
+        renderOptionsView();
+    }
+}
+
+function renderOptionsChart(chartData) {
+    if (!chartData || typeof Chart === "undefined") return;
+    const canvas = document.getElementById("options-oi-chart");
+    if (!canvas) return;
+
+    const strikes = Array.isArray(chartData.strikes) ? chartData.strikes : [];
+    const calls = Array.isArray(chartData.calls_oi) ? chartData.calls_oi : [];
+    const puts = Array.isArray(chartData.puts_oi) ? chartData.puts_oi : [];
+    if (!strikes.length) return;
+
+    destroyOptionsChart();
+    const isDark = document.body.classList.contains("dark-theme");
+    const tickColor = isDark ? "#94a3b8" : "#64748b";
+    const gridColor = isDark ? "rgba(148,163,184,0.15)" : "rgba(15,23,42,0.08)";
+
+    optionsViewState.chart = new Chart(canvas.getContext("2d"), {
+        type: "bar",
+        data: {
+            labels: strikes,
+            datasets: [
+                {
+                    label: "콜 OI (저항)",
+                    data: calls,
+                    backgroundColor: "rgba(16, 185, 129, 0.55)",
+                    borderColor: "rgba(16, 185, 129, 1)",
+                    borderWidth: 1,
+                    stack: "stack-call"
+                },
+                {
+                    label: "풋 OI (지지)",
+                    data: puts,
+                    backgroundColor: "rgba(239, 68, 68, 0.55)",
+                    borderColor: "rgba(239, 68, 68, 1)",
+                    borderWidth: 1,
+                    stack: "stack-put"
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: {
+                mode: "index",
+                intersect: false
+            },
+            plugins: {
+                legend: {
+                    labels: { color: tickColor }
+                },
+                tooltip: {
+                    backgroundColor: isDark ? "rgba(15, 23, 42, 0.9)" : "rgba(255, 255, 255, 0.95)",
+                    titleColor: isDark ? "#f8fafc" : "#0f172a",
+                    bodyColor: isDark ? "#e2e8f0" : "#0f172a",
+                    borderColor: isDark ? "rgba(148,163,184,0.35)" : "rgba(15,23,42,0.15)",
+                    borderWidth: 1
+                }
+            },
+            scales: {
+                x: {
+                    ticks: { color: tickColor },
+                    grid: { color: gridColor }
+                },
+                y: {
+                    ticks: { color: tickColor },
+                    grid: { color: gridColor }
+                }
+            }
+        }
+    });
+}
+
+function renderOptionsView() {
+    chartGrid.className = "options-view";
+    const state = optionsViewState;
+    const data = state.data;
+    const activeTab = state.activeTab || "summary";
+
+    const pcrValue = Number(data?.pcr_value);
+    const pcrDescriptor = getOptionsPcrDescriptor(pcrValue);
+    const disparity = Number(data?.disparity_rate);
+    const disparityClass = getOptionsDisparityClass(disparity);
+    const disparityText = Number.isFinite(disparity) ? `${disparity > 0 ? "+" : ""}${disparity.toFixed(2)}%` : "-";
+    const atmIvText = Number.isFinite(Number(data?.atm_iv)) ? `${Number(data.atm_iv).toFixed(2)}%` : "-";
+
+    const summaryTabHtml = data ? `
+        <div class="options-data-grid">
+            <div class="options-data-item">
+                <span class="options-label">현재 주가</span>
+                <span class="options-value">$${Number(data.current_price).toFixed(2)}</span>
+            </div>
+            <div class="options-data-item">
+                <span class="options-label">분석 만기일</span>
+                <span class="options-value options-text-blue">${escapeHtml(data.expiry_date)}</span>
+            </div>
+            <div class="options-data-item options-data-highlight">
+                <span class="options-label">Max Pain (기관 목표가)</span>
+                <span class="options-value options-text-gradient">$${Number(data.max_pain_price).toFixed(2)}</span>
+            </div>
+            <div class="options-data-item">
+                <span class="options-label">괴리율 추정</span>
+                <span class="options-pill options-disparity-badge ${disparityClass}">${disparityText}</span>
+            </div>
+        </div>
+    ` : '<div class="options-empty">티커를 조회하면 요약 지표가 표시됩니다.</div>';
+
+    const chartTabHtml = data ? `
+        <div class="options-chart-wrap">
+            <h4 class="options-section-title">미결제약정(OI) 방어선 차트</h4>
+            <p class="options-section-desc">현재가 위아래 20% 이내 행사가의 콜/풋 미결제 물량입니다.</p>
+            <div class="options-chart-canvas">
+                <canvas id="options-oi-chart"></canvas>
+            </div>
+        </div>
+    ` : '<div class="options-empty">차트 데이터가 없습니다.</div>';
+
+    const pcrTabHtml = data ? `
+        <h4 class="options-section-title">풋/콜 비율 (Put/Call Ratio)</h4>
+        <p class="options-section-desc">시장의 매수(콜) vs 매도(풋) 심리를 나타냅니다.</p>
+        <div class="options-pcr-panel">
+            <div class="options-pcr-score">
+                <span class="options-pcr-value">${pcrValue.toFixed(2)}</span>
+                <span class="options-pill ${pcrDescriptor.badgeClass}">${pcrDescriptor.badge}</span>
+            </div>
+            <p class="options-pcr-explanation">${pcrDescriptor.summaryHtml}</p>
+        </div>
+    ` : '<div class="options-empty">PCR 데이터가 없습니다.</div>';
+
+    const ivTabHtml = data ? `
+        <h4 class="options-section-title">내재 변동성 (Implied Volatility)</h4>
+        <p class="options-section-desc">옵션 만기 전까지 가격이 얼마나 크게 움직일지 보여주는 수치입니다.</p>
+        <div class="options-iv-panel">
+            <div class="options-iv-value">${atmIvText}</div>
+            <p class="options-pcr-explanation">수치가 높을수록 만기 전 급등/급락 변동 리스크가 큽니다.</p>
+        </div>
+    ` : '<div class="options-empty">IV 데이터가 없습니다.</div>';
+
+    chartGrid.innerHTML = `
+        <section class="options-shell">
+            <div class="options-background-effects">
+                <div class="options-glow options-glow-1"></div>
+                <div class="options-glow options-glow-2"></div>
+            </div>
+
+            <header class="options-hero">
+                <h2><span class="options-gradient-text">Max Pain</span> 프로</h2>
+                <p>미국 주식 전문 옵션 데이터 시각화 보드</p>
+            </header>
+
+            <div class="options-search-row">
+                <form id="options-search-form" class="options-search-form">
+                    <div class="options-input-group">
+                        <svg class="options-search-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="11" cy="11" r="8"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        <input id="options-ticker-input" type="text" value="${escapeHtml(state.ticker || "")}" placeholder="티커 검색 (예: TSLA, AAPL)" />
+                        <button type="submit">조회</button>
+                    </div>
+                </form>
+                <div class="options-meta">
+                    ${data ? `<strong>${escapeHtml(data.ticker)}</strong><span>${escapeHtml(data.current_time || "")}</span>` : '<span>미국 주식 옵션 체인 기반 Max Pain 분석</span>'}
+                </div>
+            </div>
+
+            ${state.error ? `<div class="options-alert">${escapeHtml(state.error)}</div>` : ""}
+            ${state.loading ? `
+                <div class="options-loading">
+                    <div class="spinner"></div>
+                    <p>방대한 옵션 체인 데이터를 분석 중입니다...</p>
+                </div>
+            ` : ""}
+
+            ${!state.loading && data ? `
+                <div class="options-card options-glass-card">
+                    <div class="options-card-head">
+                        <div class="options-header-left">
+                            <h3><span class="options-ticker-highlight">${escapeHtml(data.ticker)}</span></h3>
+                            <span class="options-time-badge">${escapeHtml(data.current_time || "")}</span>
+                        </div>
+                        <select id="options-expiry-select" class="options-expiry-select">
+                            ${(data.available_expirations || []).map(exp => `
+                                <option value="${escapeHtml(exp)}" ${exp === data.expiry_date ? "selected" : ""}>${escapeHtml(exp)}</option>
+                            `).join("")}
+                        </select>
+                    </div>
+                    <div class="options-tabs">
+                        <button class="options-tab-btn ${activeTab === "summary" ? "active" : ""}" data-tab="summary">📊 요약 지표</button>
+                        <button class="options-tab-btn ${activeTab === "chart" ? "active" : ""}" data-tab="chart">📈 물량 차트</button>
+                        <button class="options-tab-btn ${activeTab === "pcr" ? "active" : ""}" data-tab="pcr">⚖️ 심리 분석</button>
+                        <button class="options-tab-btn ${activeTab === "iv" ? "active" : ""}" data-tab="iv">🌪️ 변동성</button>
+                    </div>
+                    <div class="options-tab-body">
+                        ${activeTab === "summary" ? summaryTabHtml : ""}
+                        ${activeTab === "chart" ? chartTabHtml : ""}
+                        ${activeTab === "pcr" ? pcrTabHtml : ""}
+                        ${activeTab === "iv" ? ivTabHtml : ""}
+                    </div>
+                    <div class="options-card-footer">
+                        전문가용 4대 지표 교차 분석: ① Max Pain(방향), ② OI 차트(지지/저항), ③ PCR(심리), ④ IV(변동성)
+                    </div>
+                </div>
+            ` : ""}
+        </section>
+    `;
+
+    const form = document.getElementById("options-search-form");
+    if (form) {
+        form.addEventListener("submit", (event) => {
+            event.preventDefault();
+            const input = document.getElementById("options-ticker-input");
+            const ticker = input ? input.value : "";
+            fetchOptionsData(ticker, "");
+        });
+    }
+
+    const expirySelect = document.getElementById("options-expiry-select");
+    if (expirySelect) {
+        expirySelect.addEventListener("change", (event) => {
+            fetchOptionsData(state.ticker || data?.ticker || OPTIONS_DEFAULT_TICKER, event.target.value);
+        });
+    }
+
+    document.querySelectorAll(".options-tab-btn").forEach((button) => {
+        button.addEventListener("click", () => {
+            state.activeTab = button.dataset.tab || "summary";
+            renderOptionsView();
+        });
+    });
+
+    if (activeTab === "chart" && data && !state.loading) {
+        requestAnimationFrame(() => renderOptionsChart(data.chart_data));
+    } else {
+        destroyOptionsChart();
+    }
+
+    if (!state.hasLoadedOnce && !state.loading && !state.data && !state.error) {
+        fetchOptionsData(state.ticker || OPTIONS_DEFAULT_TICKER, state.selectedExpiry);
+    }
+}
+
 function buildTodayConclusion(intel) {
     const leadWarning = intel.riskWarnings[0];
     if (intel.regime.tone === "bullish") {
@@ -645,7 +1111,7 @@ function sortModeButtons() {
     const controls = document.querySelector(".controls");
     if (!controls) return;
 
-    const preferredOrder = ["report", "global", "intel", "gurus", "calendar"];
+    const preferredOrder = ["report", "global", "intel", "options", "gurus", "calendar"];
     const modeButtons = Array.from(controls.querySelectorAll(".mode-btn"));
     const anchor = Array.from(controls.children).find(child => !child.classList.contains("mode-btn"));
     const fragment = document.createDocumentFragment();
@@ -987,6 +1453,7 @@ function refreshGlobalMarketCard(id) {
 
 window.setGlobalMarketInterval = setGlobalMarketInterval;
 window.refreshGlobalMarketCard = refreshGlobalMarketCard;
+window.renderDataLoadFailure = renderDataLoadFailure;
 
 function average(values) {
     const valid = values.filter(value => Number.isFinite(value));

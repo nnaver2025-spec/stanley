@@ -4,9 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>거인의 어깨 - 매크로 대시보드</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=20260408b">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body class="light-theme">
     <div id="ticker-tape-container"></div>
@@ -19,6 +20,7 @@
                 <button class="mode-btn" data-mode="global">글로벌 시장</button>
                 <button class="mode-btn active" data-mode="report">시장 요약</button>
                 <button class="mode-btn" data-mode="intel">AI 시장 분석</button>
+                <button class="mode-btn" data-mode="options">미국주식 옵션</button>
                 <button class="mode-btn" data-mode="gurus">대가의 시선</button>
                 <button class="mode-btn" data-mode="calendar">경제 캘린더</button>
 
@@ -66,7 +68,8 @@
         </div>
     </div>
 
-    <script src="data.js"></script>
-    <script src="script.js"></script>
+    <script>window.__dashboardDataScriptStatus = "loading";</script>
+    <script src="data.js?v=20260408b" onload="window.__dashboardDataScriptStatus='loaded'" onerror="window.__dashboardDataScriptStatus='failed'"></script>
+    <script src="script.js?v=20260408b"></script>
 </body>
 </html>

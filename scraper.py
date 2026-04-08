@@ -614,6 +614,17 @@ def get_fred_data(series_id):
         return None
 
 def calculate_macro_stats(live_data, all_hist):
+    def get_live_snapshot(symbol):
+        snapshot = live_data.get(symbol)
+        return snapshot if isinstance(snapshot, dict) else {}
+
+    def get_live_float(symbol, field, default=0.0):
+        raw = get_live_snapshot(symbol).get(field, default)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
     # Copper / Gold Ratio
     cu = all_hist.get("COMEX:HG1!")
     au = all_hist.get("TVC:GOLD")
@@ -677,8 +688,8 @@ def calculate_macro_stats(live_data, all_hist):
         macro["yield_curve_2y"] = get_ratio_stats(t10y2y, None)
     else:
         # Manual fallback from live_data
-        y10 = float(live_data.get("TVC:US10Y", {}).get("price", 0))
-        y02 = float(live_data.get("TVC:US02Y", {}).get("price", 0))
+        y10 = get_live_float("TVC:US10Y", "price", 0)
+        y02 = get_live_float("TVC:US02Y", "price", 0)
         if y10 and y02:
             macro["yield_curve_2y"] = {
                 "val": round(y10 - y02, 4),
@@ -692,8 +703,8 @@ def calculate_macro_stats(live_data, all_hist):
         macro["yield_curve_3m"] = get_ratio_stats(t10y3m, None)
     else:
         # Manual fallback from live_data
-        y10 = float(live_data.get("TVC:US10Y", {}).get("price", 0))
-        y3m = float(live_data.get("TVC:US3M", {}).get("price", 0)) if "TVC:US3M" in live_data else None
+        y10 = get_live_float("TVC:US10Y", "price", 0)
+        y3m = get_live_float("TVC:US3M", "price", 0) if "TVC:US3M" in live_data else None
         if y10 and y3m:
             macro["yield_curve_3m"] = {
                 "val": round(y10 - y3m, 4),
@@ -1617,17 +1628,28 @@ def get_guru_portfolios():
 
 def get_ai_strategy_v2(live_data, macro_data):
     """Generate a 3-tier strategy with rationale."""
+    def get_snapshot(mapping, key):
+        value = mapping.get(key)
+        return value if isinstance(value, dict) else {}
+
+    def get_float(mapping, key, field, default=0.0):
+        raw = get_snapshot(mapping, key).get(field, default)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return default
+
     # Short-term (Tactical)
-    vix_val = float(live_data.get("VIX", {}).get("price", 20))
-    spx_1d = float(live_data.get("SP:SPX", {}).get("idx1D", 0))
+    vix_val = get_float(live_data, "VIX", "price", 20)
+    spx_1d = get_float(live_data, "SP:SPX", "idx1D", 0)
     short_term = "변동성 관리 및 저점 매수 기획" if vix_val > 25 else "단기 상승 모멘텀 지속 관찰"
     if spx_1d < -1: short_term = "과매도 구간 진입, 단기 반등 신호 대기"
     elif spx_1d > 1: short_term = "단기 과열 주의, 익절 구간 탐색"
     short_rationale = f"VIX({vix_val}) 및 S&P 1일 등락률({spx_1d}%) 기반 하위 5일 변동성 분석 결과"
 
     # Medium-term (Trend)
-    liquidity = macro_data.get("liquidity", {}).get("trend", "neutral")
-    growth_val = macro_data.get("growth_value", {}).get("trend", "neutral")
+    liquidity = get_snapshot(macro_data, "liquidity").get("trend", "neutral")
+    growth_val = get_snapshot(macro_data, "growth_value").get("trend", "neutral")
     if liquidity == "up" and growth_val == "up":
         medium_term = "성장주 중심의 공격적 추세 추종 전략"
     elif liquidity == "down":
@@ -1637,8 +1659,8 @@ def get_ai_strategy_v2(live_data, macro_data):
     medium_rationale = f"달러 유동성({liquidity}) 및 성장/가치주 상대 강도({growth_val}) 추세 분석 결과"
 
     # Long-term (Macro Cycle)
-    yield_curve = macro_data.get("yield_curve", {}).get("val", 0)
-    cu_au = macro_data.get("cu_au", {}).get("trend", "neutral")
+    yield_curve = get_snapshot(macro_data, "yield_curve_2y").get("val", 0)
+    cu_au = get_snapshot(macro_data, "cu_au").get("trend", "neutral")
     if yield_curve < 0:
         long_term = "경기 침체 리스크 대비, 채권 및 금 비중 확대"
     elif cu_au == "up":
