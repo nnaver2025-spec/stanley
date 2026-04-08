@@ -1,3 +1,5 @@
 __pycache__/
 .DS_Store
 data.js
+launchd-server.out.log
+launchd-server.err.log
