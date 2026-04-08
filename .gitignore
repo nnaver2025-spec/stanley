@@ -3,3 +3,6 @@ __pycache__/
 data.js
 launchd-server.out.log
 launchd-server.err.log
+tv_debug*.html
+tv_test*.html
+archive/debug_html/
