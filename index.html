@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>거인의 어깨 - 매크로 대시보드</title>
+    <link rel="stylesheet" href="style.css?v=20260408b">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body class="light-theme">
+    <div id="ticker-tape-container"></div>
+    <header>
+        <div class="logo-area">
+            <h1>거인의 <span>어깨</span></h1>
+            <p>Insider View</p>
+        </div>
+        <div class="controls">
+                <button class="mode-btn" data-mode="global">글로벌 시장</button>
+                <button class="mode-btn active" data-mode="report">시장 요약</button>
+                <button class="mode-btn" data-mode="intel">AI 시장 분석</button>
+                <button class="mode-btn" data-mode="options">미국주식 옵션</button>
+                <button class="mode-btn" data-mode="gurus">대가의 시선</button>
+                <button class="mode-btn" data-mode="calendar">경제 캘린더</button>
+
+
+            <button id="toggle-sidebar-btn" class="sidebar-toggle-btn" title="사이드바 토글">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="15" y1="3" x2="15" y2="21"></line></svg>
+            </button>
+            <button id="theme-toggle-btn" class="sidebar-toggle-btn" title="테마 변경">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+            </button>
+        </div>
+    </header>
+
+    <main id="chart-grid" class="report-view">
+        <!-- Charts will be dynamically loaded here -->
+        <div class="loading-state">
+            <div class="spinner"></div>
+            <p>데이터를 불러오는 중입니다...</p>
+        </div>
+    </main>
+
+    <aside id="signal-sidebar">
+        <div class="sidebar-header">
+            <h3>시장 시그널 노트</h3>
+        </div>
+        <div class="signal-quote">
+            <blockquote>"가격이 좋은 소식에 반응하지 않으면, 그것이 가장 강력한 매도 신호다."</blockquote>
+        </div>
+        <div id="playbook-container"></div>
+        <div id="sentiment-container" style="margin-top: 15px; border-top: 1px solid var(--border); padding-top: 15px;"></div>
+        <div class="sidebar-footer">
+        </div>
+    </aside>
+
+    <div class="subtle-metadata">
+        <span id="last-updated-text">Updating...</span> (<span id="refresh-timer">1:00</span>) · <span id="market-session-text">시장 상태 확인 중...</span>
+    </div>
+
+    <!-- Macro Knowledge Popover -->
+    <div id="popover-overlay" class="popover-overlay"></div>
+    <div id="macro-popover" class="macro-popover">
+        <button id="close-popover" class="close-popover">×</button>
+        <div id="popover-content" class="popover-content">
+            <!-- Content will be injected by JS -->
+        </div>
+    </div>
+
+    <script>window.__dashboardDataScriptStatus = "loading";</script>
+    <script src="data.js?v=20260408b" onload="window.__dashboardDataScriptStatus='loaded'" onerror="window.__dashboardDataScriptStatus='failed'"></script>
+    <script src="script.js?v=20260408b"></script>
+</body>
+</html>

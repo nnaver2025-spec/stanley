@@ -1,0 +1,8 @@
+__pycache__/
+.DS_Store
+data.js
+launchd-server.out.log
+launchd-server.err.log
+tv_debug*.html
+tv_test*.html
+archive/debug_html/
