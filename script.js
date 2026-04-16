@@ -87,6 +87,34 @@ let currentCategory = "indices";
 let currentTimeframe = "D";
 let currentMode = "report";
 const STRATEGY_VISIBILITY_KEY = "stanley_strategy_cards_visible";
+const INTEL_PREDICTION_HISTORY_KEY = "stanley_intel_prediction_history_v1";
+const INTEL_PREDICTION_MAX_ITEMS = 3000;
+const INTEL_BENCHMARK_SYMBOL = "SP:SPX";
+const INTEL_RISK_PROFILE_KEY = "stanley_intel_risk_profile";
+const INTEL_RISK_PROFILE_PRESETS = {
+    aggressive: {
+        label: "공격",
+        allocationShift: { risk: 10, cash: -6, hedge: -4 },
+        sizingShift: 0.1,
+        note: "공격 성향: 조건 충족 시 리스크 비중 확대를 우선합니다."
+    },
+    neutral: {
+        label: "중립",
+        allocationShift: { risk: 0, cash: 0, hedge: 0 },
+        sizingShift: 0,
+        note: "중립 성향: 현재 모델 기본 배분을 그대로 사용합니다."
+    },
+    conservative: {
+        label: "보수",
+        allocationShift: { risk: -10, cash: 7, hedge: 3 },
+        sizingShift: -0.1,
+        note: "보수 성향: 리스크 노출보다 현금·헤지 완충을 우선합니다."
+    }
+};
+const INTEL_HORIZON_CONFIG = {
+    "1d": { ms: 24 * 60 * 60 * 1000, bullThreshold: 0.15, bearThreshold: -0.15, neutralBand: 0.6 },
+    "5d": { ms: 5 * 24 * 60 * 60 * 1000, bullThreshold: 0.5, bearThreshold: -0.5, neutralBand: 1.5 }
+};
 const GLOBAL_MARKET_SECTIONS = [
     {
         title: "US Equity Benchmarks",
@@ -448,7 +476,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const initData = () => {
         loadCategory(currentCategory);
         displayMetadata();
-        loadEconomicCalendar();
+        syncIntelPredictionHistory();
         renderSentiment();
         renderPlaybookSidebar();
         triggerViewTransition();
@@ -473,7 +501,6 @@ document.addEventListener("DOMContentLoaded", () => {
             localStorage.setItem("druckenmiller_theme", isDark ? "dark" : "light");
             // Reload widgets for theme compatibility
             loadTickerTape();
-            loadEconomicCalendar();
             rerenderCurrentMode();
         });
     }
@@ -535,6 +562,17 @@ function rerenderCurrentMode(animate = true) {
 
 function toggleStrategyCards() {
     localStorage.setItem(STRATEGY_VISIBILITY_KEY, areStrategyCardsVisible() ? "0" : "1");
+    rerenderCurrentMode();
+}
+
+function getIntelRiskProfile() {
+    const saved = localStorage.getItem(INTEL_RISK_PROFILE_KEY);
+    return saved && INTEL_RISK_PROFILE_PRESETS[saved] ? saved : "neutral";
+}
+
+function setIntelRiskProfile(profile) {
+    if (!INTEL_RISK_PROFILE_PRESETS[profile]) return;
+    localStorage.setItem(INTEL_RISK_PROFILE_KEY, profile);
     rerenderCurrentMode();
 }
 
@@ -604,11 +642,12 @@ function refreshDataSilently() {
                 renderDataLoadFailure("data.js를 읽었지만 유효한 데이터 객체가 없습니다.");
                 return;
             }
+            displayMetadata();
+            syncIntelPredictionHistory();
             // Global view: skip full re-render to remove 1-minute flicker motion.
             if (currentMode !== "global") {
                 rerenderCurrentMode(false); // false = no animation
             }
-            displayMetadata();
             renderSentiment();
             renderPlaybookSidebar();
             console.log("Data refreshed silently at " + new Date().toLocaleTimeString());
@@ -656,49 +695,6 @@ function getSessionState(now, config) {
     const isWeekend = p.weekday === "Sat" || p.weekday === "Sun";
     const minuteOfDay = p.hour * 60 + p.minute;
     const isOpen = !isWeekend && minuteOfDay >= config.openMinute && minuteOfDay < config.closeMinute;
-    return `${config.name}: ${isOpen ? "열림" : "마감"}`;
-}
-
-function getMarketSessionSummary() {
-    const now = new Date();
-    const us = getSessionState(now, {
-        name: "미국장",
-        timeZone: "America/New_York",
-        openMinute: 9 * 60 + 30,
-        closeMinute: 16 * 60
-    });
-    const kr = getSessionState(now, {
-        name: "한국장",
-        timeZone: "Asia/Seoul",
-        openMinute: 9 * 60,
-        closeMinute: 15 * 60 + 30
-    });
-    return `${us} · ${kr}`;
-}
-
-function displayMetadata() {
-    if (window.DASHBOARD_DATA && window.DASHBOARD_DATA.last_updated) {
-        const text = document.getElementById("last-updated-text");
-        if (text) text.textContent = `최근 업데이트: ${window.DASHBOARD_DATA.last_updated}`;
-    }
-}
-
-function displayMetadata() {
-    if (window.DASHBOARD_DATA && window.DASHBOARD_DATA.last_updated) {
-        const text = document.getElementById("last-updated-text");
-        if (text) text.textContent = `최근 업데이트: ${window.DASHBOARD_DATA.last_updated}`;
-    }
-    const sessionText = document.getElementById("market-session-text");
-    if (sessionText) {
-        sessionText.textContent = getMarketSessionSummary();
-    }
-}
-
-function getSessionState(now, config) {
-    const p = getTimeZoneParts(now, config.timeZone);
-    const isWeekend = p.weekday === "Sat" || p.weekday === "Sun";
-    const minuteOfDay = p.hour * 60 + p.minute;
-    const isOpen = !isWeekend && minuteOfDay >= config.openMinute && minuteOfDay < config.closeMinute;
     return `${config.name}: ${isOpen ? "OPEN" : "CLOSED"}`;
 }
 
@@ -728,134 +724,6 @@ function displayMetadata() {
     if (sessionText) {
         sessionText.textContent = getMarketSessionSummary();
     }
-}
-
-const getLocalDateStr = (date = new Date()) => {
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-};
-
-let currentCalendarDate = getLocalDateStr();
-
-function changeCalendarDate(delta) {
-    const d = new Date(currentCalendarDate);
-    d.setDate(d.getDate() + delta);
-    currentCalendarDate = getLocalDateStr(d);
-    renderCalendarView();
-}
-
-function setCalendarToday() {
-    currentCalendarDate = getLocalDateStr();
-    renderCalendarView();
-}
-
-// Expose to window for onclick handlers
-window.changeCalendarDate = changeCalendarDate;
-window.setCalendarToday = setCalendarToday;
-
-function renderCalendarView() {
-    const cg = document.getElementById('chart-grid');
-    cg.innerHTML = '<div class="calendar-view-container"></div>';
-    cg.classList.add('calendar-active');
-    const container = cg.querySelector('.calendar-view-container');
-    const allEvents = window.DASHBOARD_DATA.calendar || [];
-    
-    // Filter by selected date
-    const filteredEvents = allEvents.filter(ev => ev.date === currentCalendarDate);
-    
-    const displayDate = new Date(currentCalendarDate + "T00:00:00");
-    const dateStr = displayDate.toLocaleDateString('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' });
-    const isToday = currentCalendarDate === getLocalDateStr();
-
-    let html = `
-        <div class="calendar-header-strip">
-            <button class="calendar-nav-btn prev-day" onclick="changeCalendarDate(-1)">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M15 18l-6-6 6-6"/></svg>
-            </button>
-            <div class="calendar-center-group">
-                ${isToday ? '<span class="btn-today">오늘</span>' : '<button class="btn-today" style="background: rgba(255,255,255,0.1); color: var(--text-secondary);" onclick="setCalendarToday()">오늘</button>'}
-                <div class="calendar-date-display">
-                    ${dateStr}
-                    <span class="calendar-count-sub">${filteredEvents.length}건</span>
-                </div>
-            </div>
-            <button class="calendar-nav-btn next-day" onclick="changeCalendarDate(1)">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
-            </button>
-        </div>
-    `;
-
-    if (filteredEvents.length === 0) {
-        html += '<div class="loading-state" style="padding: 4rem;"><p>해당 날짜에 예정된 주요 지표가 없습니다.</p></div>';
-    } else {
-        filteredEvents.forEach(event => {
-            // Build metrics line (inline like reference)
-            let metricsHtml = '';
-            const metricParts = [];
-            if (event.forecast) metricParts.push(`예측 <strong>${event.forecast}</strong>`);
-            metricParts.push(`이전 <strong>${event.previous || '-'}</strong>`);
-            if (event.actual) {
-                metricParts.push(`<span class="ec-actual-value">발표 <strong>${event.actual}</strong></span>`);
-            } else {
-                metricParts.push(`<span class="ec-pending">발표 예정</span>`);
-            }
-            metricsHtml = metricParts.join('&nbsp;&nbsp;&nbsp;&nbsp;');
-
-            // Build AI 해석 box (only when actual exists)
-            let aiBoxHtml = '';
-            if (event.actual && event.ai_summary && event.ai_summary.length > 0) {
-                const sentimentClass = event.sentiment === '긍정적 발표' ? 'ec-sentiment-positive' 
-                    : event.sentiment === '부정적 발표' ? 'ec-sentiment-negative' 
-                    : 'ec-sentiment-neutral';
-                const sentimentDot = event.sentiment === '긍정적 발표' ? '🟢' 
-                    : event.sentiment === '부정적 발표' ? '🔴' 
-                    : '⚪';
-
-                aiBoxHtml = `
-                    <div class="ec-ai-box">
-                        <div class="ec-ai-header">
-                            <div class="ec-ai-label">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-                                AI 해석
-                            </div>
-                            <div class="ec-sentiment ${sentimentClass}">
-                                ${sentimentDot} ${event.sentiment || ''}
-                            </div>
-                        </div>
-                        <div class="ec-ai-bullets">
-                            ${event.ai_summary.map(b => `<div class="ec-ai-bullet">▸ ${b}</div>`).join('')}
-                        </div>
-                    </div>
-                `;
-            }
-
-            html += `
-                <div class="ec-card">
-                    <div class="ec-card-main">
-                        <div class="ec-time">${event.time}</div>
-                        <div class="ec-content">
-                            <div class="ec-badges">
-                                <span class="ec-badge ec-badge-country">${event.country}</span>
-                                <span class="ec-badge ${event.importance === '중요' ? 'ec-badge-important' : 'ec-badge-normal'}">${event.importance}</span>
-                            </div>
-                            <div class="ec-title">${event.title}</div>
-                            <div class="ec-metrics">${metricsHtml}</div>
-                        </div>
-                    </div>
-                    ${aiBoxHtml}
-                </div>
-            `;
-        });
-    }
-
-    container.innerHTML = html;
-}
-
-function loadEconomicCalendar() {
-    // Redundant now as we use the main tab, but kept for compatibility or mini-view if requested.
-    // For now, it prevents errors in initData.
 }
 
 function loadTickerTape() {
@@ -1230,6 +1098,38 @@ function renderOptionsView() {
                         전문가용 4대 지표 교차 분석: ① Max Pain(방향), ② OI 차트(지지/저항), ③ PCR(심리), ④ IV(변동성)
                     </div>
                 </div>
+
+                ${data.ai_analysis ? `
+                    <div class="options-ai-container">
+                        <header class="options-ai-header">
+                            <span class="options-pill options-pill-ai">🤖 AI 전문가 분석</span>
+                            <h4>시각에 따른 3인 3색 대응 전략</h4>
+                        </header>
+                        <div class="options-persona-grid">
+                            <div class="persona-card persona-prof ${data.ai_analysis.professional.tone}">
+                                <div class="persona-head">
+                                    <div class="persona-avatar">💼</div>
+                                    <h5>${escapeHtml(data.ai_analysis.professional.name)}</h5>
+                                </div>
+                                <p class="persona-opinion">${escapeHtml(data.ai_analysis.professional.opinion)}</p>
+                            </div>
+                            <div class="persona-card persona-trader ${data.ai_analysis.trader.tone}">
+                                <div class="persona-head">
+                                    <div class="persona-avatar">🔥</div>
+                                    <h5>${escapeHtml(data.ai_analysis.trader.name)}</h5>
+                                </div>
+                                <p class="persona-opinion">${escapeHtml(data.ai_analysis.trader.opinion)}</p>
+                            </div>
+                            <div class="persona-card persona-manager ${data.ai_analysis.manager.tone}">
+                                <div class="persona-head">
+                                    <div class="persona-avatar">🛡️</div>
+                                    <h5>${escapeHtml(data.ai_analysis.manager.name)}</h5>
+                                </div>
+                                <p class="persona-opinion">${escapeHtml(data.ai_analysis.manager.opinion)}</p>
+                            </div>
+                        </div>
+                    </div>
+                ` : ""}
             ` : ""}
         </section>
     `;
@@ -1330,6 +1230,383 @@ function loadNotes() {
 function toNumber(value, fallback = 0) {
     const parsed = parseFloat(value);
     return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseDashboardTimestamp(value) {
+    if (typeof value !== "string") return null;
+    const match = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+    if (!match) return null;
+    const [, year, month, day, hour, minute, second = "0"] = match;
+    const timestamp = new Date(
+        Number(year),
+        Number(month) - 1,
+        Number(day),
+        Number(hour),
+        Number(minute),
+        Number(second)
+    ).getTime();
+    return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function loadIntelPredictionHistory() {
+    try {
+        const raw = localStorage.getItem(INTEL_PREDICTION_HISTORY_KEY);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+        console.warn("Failed to parse intel prediction history:", error);
+        return [];
+    }
+}
+
+function saveIntelPredictionHistory(history) {
+    try {
+        localStorage.setItem(INTEL_PREDICTION_HISTORY_KEY, JSON.stringify(history));
+    } catch (error) {
+        console.warn("Failed to save intel prediction history:", error);
+    }
+}
+
+function scorePredictionOutcome(tone, returnPct, horizonKey) {
+    const config = INTEL_HORIZON_CONFIG[horizonKey];
+    if (!config || !Number.isFinite(returnPct)) return false;
+    if (tone === "bullish") return returnPct >= config.bullThreshold;
+    if (tone === "bearish") return returnPct <= config.bearThreshold;
+    return Math.abs(returnPct) <= config.neutralBand;
+}
+
+function getPredictionKeysByHorizon(horizonKey) {
+    if (horizonKey === "1d") {
+        return { hitKey: "hit1d", returnKey: "return1d", evalKey: "evaluatedAt1d" };
+    }
+    return { hitKey: "hit5d", returnKey: "return5d", evalKey: "evaluatedAt5d" };
+}
+
+function computePredictionMetrics(history, horizonKey, sampleSize = 20) {
+    const { hitKey, evalKey } = getPredictionKeysByHorizon(horizonKey);
+    const resolved = history
+        .filter(item => typeof item?.[hitKey] === "boolean" && Number.isFinite(item?.[evalKey]))
+        .sort((a, b) => (b[evalKey] || 0) - (a[evalKey] || 0));
+    const recent = resolved.slice(0, sampleSize);
+    const total = recent.length;
+    const hits = recent.filter(item => item[hitKey] === true).length;
+
+    const buildToneStats = tone => {
+        const rows = recent.filter(item => item.tone === tone);
+        const toneHits = rows.filter(item => item[hitKey] === true).length;
+        return {
+            total: rows.length,
+            hits: toneHits,
+            precision: rows.length ? Math.round((toneHits / rows.length) * 100) : null
+        };
+    };
+
+    return {
+        sampleSize: total,
+        hits,
+        hitRate: total ? Math.round((hits / total) * 100) : null,
+        bullish: buildToneStats("bullish"),
+        bearish: buildToneStats("bearish")
+    };
+}
+
+function buildPredictionPerformanceBadge(history) {
+    const stats1d = computePredictionMetrics(history, "1d", 20);
+    const stats5d = computePredictionMetrics(history, "5d", 20);
+    const scoreCandidates = [stats1d.hitRate, stats5d.hitRate].filter(Number.isFinite);
+    const minScore = scoreCandidates.length ? Math.min(...scoreCandidates) : null;
+
+    let tone = "caution";
+    if (Number.isFinite(minScore) && minScore >= 60) {
+        tone = "good";
+    } else if (Number.isFinite(minScore) && minScore >= 50) {
+        tone = "mixed";
+    }
+
+    const hitRate1dLabel = Number.isFinite(stats1d.hitRate) ? `${stats1d.hitRate}%` : "집계 대기";
+    const hitRate5dLabel = Number.isFinite(stats5d.hitRate) ? `${stats5d.hitRate}%` : "집계 대기";
+    const status = `1D ${hitRate1dLabel} (n=${stats1d.sampleSize}) · 5D ${hitRate5dLabel} (n=${stats5d.sampleSize})`;
+    const detail = `최근 20회 기준 Bull 정밀도: 1D ${stats1d.bullish.precision ?? "--"}% (n=${stats1d.bullish.total}), 5D ${stats5d.bullish.precision ?? "--"}% (n=${stats5d.bullish.total}) | Bear 정밀도: 1D ${stats1d.bearish.precision ?? "--"}% (n=${stats1d.bearish.total}), 5D ${stats5d.bearish.precision ?? "--"}% (n=${stats5d.bearish.total})`;
+
+    return {
+        label: "예측 성능",
+        status,
+        tone,
+        detail
+    };
+}
+
+function syncIntelPredictionHistory() {
+    if (!window.DASHBOARD_DATA) return [];
+
+    const history = loadIntelPredictionHistory();
+    const now = Date.now();
+    const benchmarkPrice = toNumber(getAssetSnapshot(INTEL_BENCHMARK_SYMBOL)?.price, NaN);
+    let hasMutations = false;
+
+    if (Number.isFinite(benchmarkPrice) && benchmarkPrice > 0) {
+        history.forEach(entry => {
+            if (!entry || !Number.isFinite(entry.snapshotTs) || !Number.isFinite(entry.benchmarkPrice) || entry.benchmarkPrice <= 0) {
+                return;
+            }
+            const ageMs = now - entry.snapshotTs;
+            Object.entries(INTEL_HORIZON_CONFIG).forEach(([horizonKey, config]) => {
+                const { hitKey, returnKey, evalKey } = getPredictionKeysByHorizon(horizonKey);
+                if (typeof entry[hitKey] === "boolean") return;
+                if (ageMs < config.ms) return;
+
+                const returnPct = ((benchmarkPrice - entry.benchmarkPrice) / entry.benchmarkPrice) * 100;
+                entry[returnKey] = Number(returnPct.toFixed(3));
+                entry[hitKey] = scorePredictionOutcome(entry.tone, returnPct, horizonKey);
+                entry[evalKey] = now;
+                hasMutations = true;
+            });
+        });
+    }
+
+    const snapshotLabel = String(window.DASHBOARD_DATA.last_updated || "").trim();
+    const snapshotId = snapshotLabel ? `${INTEL_BENCHMARK_SYMBOL}|${snapshotLabel}` : "";
+    if (snapshotId && Number.isFinite(benchmarkPrice) && benchmarkPrice > 0) {
+        const alreadyExists = history.some(item => item.id === snapshotId);
+        if (!alreadyExists) {
+            const intel = buildMarketIntel();
+            history.push({
+                id: snapshotId,
+                snapshotLabel,
+                snapshotTs: parseDashboardTimestamp(snapshotLabel) || now,
+                createdAt: now,
+                tone: intel.regime.tone,
+                confidence: intel.confidence.score,
+                benchmarkSymbol: INTEL_BENCHMARK_SYMBOL,
+                benchmarkPrice: Number(benchmarkPrice.toFixed(4))
+            });
+            hasMutations = true;
+        }
+    }
+
+    if (history.length > INTEL_PREDICTION_MAX_ITEMS) {
+        history.splice(0, history.length - INTEL_PREDICTION_MAX_ITEMS);
+        hasMutations = true;
+    }
+
+    if (hasMutations) {
+        saveIntelPredictionHistory(history);
+    }
+
+    return history;
+}
+
+function rebalanceAllocation(allocation) {
+    const keys = ["risk", "cash", "hedge"];
+    const sanitized = keys.reduce((acc, key) => {
+        const value = toNumber(allocation?.[key], 0);
+        acc[key] = Math.max(0, value);
+        return acc;
+    }, {});
+    const total = keys.reduce((sum, key) => sum + sanitized[key], 0);
+    if (total <= 0) {
+        return { risk: 0, cash: 100, hedge: 0 };
+    }
+
+    const scaled = keys.map(key => {
+        const exact = (sanitized[key] / total) * 100;
+        return {
+            key,
+            exact,
+            floor: Math.floor(exact),
+            remainder: exact - Math.floor(exact)
+        };
+    });
+
+    let diff = 100 - scaled.reduce((sum, row) => sum + row.floor, 0);
+    scaled.sort((a, b) => b.remainder - a.remainder);
+    for (let i = 0; i < scaled.length && diff > 0; i += 1, diff -= 1) {
+        scaled[i].floor += 1;
+    }
+
+    return scaled.reduce((acc, row) => {
+        acc[row.key] = row.floor;
+        return acc;
+    }, {});
+}
+
+function countScenarioMet(rows = []) {
+    return rows.filter(item => item && typeof item === "object" && item.met).length;
+}
+
+function buildExecutionGuide(intel) {
+    const profileKey = getIntelRiskProfile();
+    const profilePreset = INTEL_RISK_PROFILE_PRESETS[profileKey] || INTEL_RISK_PROFILE_PRESETS.neutral;
+    const base = intel.regime.tone === "bullish"
+        ? { risk: 60, cash: 25, hedge: 15 }
+        : intel.regime.tone === "bearish"
+            ? { risk: 25, cash: 40, hedge: 35 }
+            : { risk: 40, cash: 35, hedge: 25 };
+
+    const confidence = intel.confidence.score;
+    const warnings = intel.riskWarnings.length;
+    const adjusted = { ...base };
+
+    if (intel.regime.tone === "bullish") {
+        if (confidence >= 75) {
+            adjusted.risk += 10;
+            adjusted.cash -= 5;
+            adjusted.hedge -= 5;
+        } else if (confidence < 55) {
+            adjusted.risk -= 8;
+            adjusted.cash += 4;
+            adjusted.hedge += 4;
+        }
+    } else if (intel.regime.tone === "bearish") {
+        if (confidence >= 75) {
+            adjusted.risk -= 8;
+            adjusted.cash += 4;
+            adjusted.hedge += 4;
+        } else if (confidence < 55) {
+            adjusted.risk += 8;
+            adjusted.cash -= 4;
+            adjusted.hedge -= 4;
+        }
+    } else {
+        if (confidence >= 70) {
+            adjusted.risk -= 3;
+            adjusted.cash += 5;
+            adjusted.hedge -= 2;
+        } else if (confidence < 55) {
+            adjusted.risk -= 4;
+            adjusted.cash += 8;
+            adjusted.hedge -= 4;
+        }
+    }
+
+    if (warnings >= 3) {
+        adjusted.risk -= 7;
+        adjusted.cash += 5;
+        adjusted.hedge += 2;
+    } else if (warnings === 0 && intel.regime.tone === "bullish") {
+        adjusted.risk += 3;
+        adjusted.cash -= 2;
+        adjusted.hedge -= 1;
+    }
+
+    adjusted.risk += profilePreset.allocationShift.risk;
+    adjusted.cash += profilePreset.allocationShift.cash;
+    adjusted.hedge += profilePreset.allocationShift.hedge;
+
+    const allocation = rebalanceAllocation(adjusted);
+    const bullishMet = countScenarioMet(intel.scenarios.bullish);
+    const bearishMet = countScenarioMet(intel.scenarios.bearish);
+    const invalidationMet = countScenarioMet(intel.scenarios.invalidation);
+
+    let sizingR = 0.6;
+    let sizingDesc = "조건 충족 전까지는 탐색 진입만 유지하고 손절 폭을 짧게 유지합니다.";
+
+    if (intel.regime.tone === "bullish") {
+        if (bullishMet >= 2 && invalidationMet === 0) {
+            sizingR = 1.0;
+            sizingDesc = "강세 조건이 다수 충족되어 기준 포지션까지 확장 가능합니다.";
+        } else if (bullishMet >= 1) {
+            sizingR = 0.7;
+            sizingDesc = "강세 시그널은 있으나 무효화 조건을 병행 점검하며 분할 접근합니다.";
+        } else {
+            sizingR = 0.5;
+            sizingDesc = "조건 충족이 부족하므로 신규 진입은 소규모 확인용만 권장됩니다.";
+        }
+    } else if (intel.regime.tone === "bearish") {
+        if (bearishMet >= 2 && invalidationMet === 0) {
+            sizingR = 0.4;
+            sizingDesc = "방어 우위 조건이 강해 롱 익스포저는 최소화하고 헤지 비중을 유지합니다.";
+        } else if (bearishMet >= 1) {
+            sizingR = 0.5;
+            sizingDesc = "하락 전환 신호가 있으나 반등 리스크를 감안해 크기를 제한합니다.";
+        } else {
+            sizingR = 0.6;
+            sizingDesc = "하락 확증이 약하므로 과도한 방어보다 중립적 관리가 적절합니다.";
+        }
+    }
+
+    const sizedWithProfile = Math.max(0.3, Math.min(1.2, Number((sizingR + profilePreset.sizingShift).toFixed(1))));
+    const sizing = {
+        title: `포지션 사이징: ${sizedWithProfile.toFixed(1)}R`,
+        desc: `${sizingDesc} (${profilePreset.label} 성향 반영)`
+    };
+
+    const entryRuleBase = intel.regime.tone === "bullish"
+        ? "진입 규칙: 상승 지속 조건 2개 이상 충족 시에만 추격 매수 허용"
+        : intel.regime.tone === "bearish"
+            ? "진입 규칙: 하락 전환 조건 2개 이상 충족 전까지 공격적 숏 확대 금지"
+            : "진입 규칙: 시나리오 충족 수가 한쪽으로 기울 때까지 분할 진입 유지";
+    const entryRule = profileKey === "aggressive"
+        ? `${entryRuleBase} · 공격 성향은 최초 진입 비중 60%까지 허용`
+        : profileKey === "conservative"
+            ? `${entryRuleBase} · 보수 성향은 최초 진입 비중 35% 이내 권장`
+            : entryRuleBase;
+
+    const riskRule = profileKey === "conservative"
+        ? "리스크 규칙: 무효화 조건 1개 충족 시 즉시 10% 축소, 2개 이상 충족 시 총 익스포저 20% 축소"
+        : "리스크 규칙: 무효화 조건 1개 충족 시 신규 진입 중단, 2개 이상 충족 시 총 익스포저 15% 축소";
+    const hedgeRule = warnings >= 3
+        ? "헤지 규칙: 리스크 경보 다수로 단기 보호(풋/인버스) 비중을 기본 대비 +5% 유지"
+        : profileKey === "aggressive"
+            ? "헤지 규칙: 평시 헤지는 최소화하되 이벤트(지표/실적) 전후로만 3~5% 탄력 운용"
+            : "헤지 규칙: 변동성 급등(VIX 급등) 발생 시에만 이벤트성 헤지 5% 이내 운용";
+
+    return {
+        allocation,
+        sizing,
+        entryRule,
+        riskRule,
+        hedgeRule,
+        profile: {
+            key: profileKey,
+            label: profilePreset.label,
+            note: profilePreset.note
+        },
+        scenarioSummary: {
+            bullish: `${bullishMet}/${intel.scenarios.bullish.length}`,
+            bearish: `${bearishMet}/${intel.scenarios.bearish.length}`,
+            invalidation: `${invalidationMet}/${intel.scenarios.invalidation.length}`
+        }
+    };
+}
+
+function buildTodayActionLines(intel, executionGuide) {
+    const bullishMet = countScenarioMet(intel.scenarios.bullish);
+    const bearishMet = countScenarioMet(intel.scenarios.bearish);
+    const invalidationMet = countScenarioMet(intel.scenarios.invalidation);
+    const warnings = intel.riskWarnings.length;
+    const firstWatch = intel.watchlistPriority[0]?.name || "핵심 지수";
+    const secondWatch = intel.watchlistPriority[1]?.name || "리더십 자산";
+
+    let doNow = `리스크 자산 비중 ${executionGuide.allocation.risk}%를 기준으로 ${firstWatch}와 ${secondWatch} 동행 여부를 확인하며 분할 진입을 진행합니다.`;
+    if (intel.regime.tone === "bearish") {
+        doNow = `현금+헤지 비중 ${executionGuide.allocation.cash + executionGuide.allocation.hedge}%를 유지하고 신규 롱은 ${executionGuide.sizing.title.replace("포지션 사이징: ", "")} 이내로 제한합니다.`;
+    } else if (intel.regime.tone === "neutral") {
+        doNow = `중립 구간이므로 비중을 급격히 늘리지 말고 ${executionGuide.sizing.title.replace("포지션 사이징: ", "")}로 탐색 진입만 유지합니다.`;
+    } else if (bullishMet >= 2) {
+        doNow = `상승 조건 ${bullishMet}/${intel.scenarios.bullish.length} 충족 상태이므로 리스크 자산 비중 ${executionGuide.allocation.risk}%까지 점진 확대합니다.`;
+    }
+
+    let avoidNow = "무효화 조건이 확인되기 전 과도한 레버리지·추격 진입은 피합니다.";
+    if (invalidationMet >= 2) {
+        avoidNow = "무효화 조건이 2개 이상 충족된 구간이라 신규 공격 진입은 중단하고 기존 포지션부터 축소합니다.";
+    } else if (warnings >= 3) {
+        avoidNow = "리스크 경보가 누적되어 단일 테마 집중 베팅과 손절 없는 홀딩을 금지합니다.";
+    } else if (intel.regime.tone === "bearish" && bearishMet >= 2) {
+        avoidNow = "반등 기대만으로 평균단가를 낮추는 물타기 진입은 피하고 방어 우선으로 운영합니다.";
+    }
+
+    let recheckWhen = `다음 데이터 갱신(60초)에서 무효화 조건 변화를 재확인하고, 장중에는 ${firstWatch} 5D 상대강도 반전 시 즉시 재평가합니다.`;
+    if (warnings >= 3) {
+        recheckWhen = "리스크 경보 다수 구간이므로 데이터 갱신마다 즉시 점검하고 무효화 조건 2개 유지 시 익스포저를 바로 축소합니다.";
+    } else if (intel.regime.tone === "bullish") {
+        recheckWhen = `${firstWatch}·${secondWatch} 리더십이 동시에 약화되면 바로 재확인하고, 무효화 조건 1개 충족 시 신규 진입을 멈춥니다.`;
+    } else if (intel.regime.tone === "bearish") {
+        recheckWhen = "신용지표와 반도체 리더십이 동시에 회복되면 즉시 재평가하고 방어 비중을 단계적으로 축소합니다.";
+    }
+
+    return { doNow, avoidNow, recheckWhen };
 }
 
 function getAllTrackedAssets() {
@@ -1706,6 +1983,7 @@ function refreshGlobalMarketCard(id) {
 
 window.setGlobalMarketInterval = setGlobalMarketInterval;
 window.refreshGlobalMarketCard = refreshGlobalMarketCard;
+window.setIntelRiskProfile = setIntelRiskProfile;
 window.renderDataLoadFailure = renderDataLoadFailure;
 
 function average(values) {
@@ -1795,7 +2073,10 @@ function buildMarketIntel() {
         summary: check.score >= 0 ? check.bullish : check.bearish
     }));
 
-    const regimeScore = macroChecks.reduce((sum, item) => sum + item.score, 0) + breadthChecks.reduce((sum, item) => sum + (item.score >= 0 ? 1 : -1), 0);
+    const macroScore = macroChecks.reduce((sum, item) => sum + item.score, 0);
+    const breadthScore = breadthChecks.reduce((sum, item) => sum + (item.score >= 0 ? 1 : -1), 0);
+    const maxScore = macroChecks.length + breadthChecks.length;
+    const regimeScore = macroScore + breadthScore;
     let regime = {
         label: "TRANSITION",
         korean: "중립적 전환 구간",
@@ -1818,8 +2099,25 @@ function buildMarketIntel() {
         };
     }
 
-    const normalizedConfidence = Math.min(100, Math.max(35, Math.round((Math.abs(regimeScore) / (macroChecks.length + breadthChecks.length)) * 100)));
+    const normalizedConfidence = Math.min(100, Math.max(35, Math.round((Math.abs(regimeScore) / maxScore) * 100)));
     const confidenceLabel = normalizedConfidence >= 75 ? "확신 높음" : normalizedConfidence >= 55 ? "확신 보통" : "신호 혼재";
+    const scoreMarker = Math.round(((regimeScore + maxScore) / (maxScore * 2)) * 100);
+    const scoreContributors = [
+        ...macroChecks.map(item => ({
+            bucket: "Macro",
+            label: item.label,
+            detail: item.summary,
+            contribution: item.score,
+            direction: item.score >= 0 ? "up" : "down"
+        })),
+        ...breadthChecks.map(item => ({
+            bucket: "Breadth",
+            label: item.label,
+            detail: `${item.summary} (5D ${item.score >= 0 ? "+" : ""}${item.score.toFixed(2)}pt)`,
+            contribution: item.score >= 0 ? 1 : -1,
+            direction: item.score >= 0 ? "up" : "down"
+        }))
+    ];
 
     const reactionCandidates = rows.map(row => {
         const trendScore = row.idxYTD + (row.idxMTD * 0.6) + getSignalWeight(row.signal) * 4;
@@ -1906,24 +2204,95 @@ function buildMarketIntel() {
             idx5D: toNumber(data?.idx5D),
             signal: data?.signal || ""
         };
-    });
+    }).slice(0, 4);
+
+    const spyTltUp = macroChecks.find(item => item.key === "spy_tlt")?.trend === "up";
+    const creditRecovery = macroChecks.find(item => item.key === "credit_stress")?.trend === "up";
+    const liquidityTightening = macroChecks.find(item => item.key === "liquidity")?.trend === "down";
+    const cyclicalBreadthWeak = breadthChecks.find(item => item.label === "경기민감 vs 방어")?.score < 0;
+    const soxxRelativeScore = breadthChecks.find(item => item.label === "반도체 리더십")?.score;
+    const xlfRelativeScore = toNumber(getAssetSnapshot("XLF")?.idx5D, NaN) - toNumber(getAssetSnapshot("SP:SPX")?.idx5D, NaN);
+    const macroUpCount = macroChecks.filter(item => item.trend === "up").length;
+    const macroDownCount = macroChecks.length - macroUpCount;
+    const leadershipLoss = Number.isFinite(soxxRelativeScore) && soxxRelativeScore < 0;
+    const jointLeadershipLoss = leadershipLoss && Number.isFinite(xlfRelativeScore) && xlfRelativeScore < 0;
+    const jointRecovery = creditRecovery && Number.isFinite(soxxRelativeScore) && soxxRelativeScore >= 0;
 
     const bullishDrivers = [
-        macroChecks.find(item => item.key === "spy_tlt")?.trend === "up" ? "주식/채권 비율이 추가 상승하며 위험 자산 선호가 강화" : null,
-        macroChecks.find(item => item.key === "credit_stress")?.trend === "up" ? "크레딧 안정이 유지돼 자금 조달 환경이 추가로 개선" : null,
-        breadthChecks.find(item => item.label === "반도체 리더십")?.score >= 0 ? "반도체가 시장 대비 우위를 유지하며 성장 리더십이 지속" : null
-    ].filter(Boolean);
-
-    const bearishDrivers = [
-        macroChecks.find(item => item.key === "liquidity")?.trend === "down" ? "달러 강세가 심화되며 유동성 여건이 추가로 악화" : "달러가 재차 강세 전환",
-        breadthChecks.find(item => item.label === "경기민감 vs 방어")?.score < 0 ? "방어 업종 우위가 고착화되며 확산 신호가 약화" : "경기민감 업종이 다시 꺾이며 추세 확신이 후퇴",
-        goodNewsLaggers.length >= 3 ? "호재 둔감 자산이 확산돼 매수 피로가 누적" : "호재 이후 가격 반응 부진이 이어짐"
+        {
+            text: "주식/채권 비율 상승으로 위험 선호 유지",
+            met: spyTltUp,
+            note: spyTltUp ? "SPX/TLT 비율이 우상향으로 유지되고 있습니다." : "채권 상대 강세가 나타나면 상승 지속 확률이 낮아집니다."
+        },
+        {
+            text: "신용시장 안정으로 자금 조달 환경 유지",
+            met: creditRecovery,
+            note: creditRecovery ? "Credit stress가 완화 방향이라 리스크 자산에 우호적입니다." : "신용 긴장이 높아지면 주식 강세의 질이 약해집니다."
+        },
+        {
+            text: "반도체 리더십이 시장 대비 우위",
+            met: Number.isFinite(soxxRelativeScore) && soxxRelativeScore >= 0,
+            note: Number.isFinite(soxxRelativeScore) && soxxRelativeScore >= 0
+                ? `SOXX 상대강도 5D +${soxxRelativeScore.toFixed(2)}pt로 리더십이 유지됩니다.`
+                : "반도체 리더십이 약해지면 추세 확신이 빠르게 떨어질 수 있습니다."
+        }
     ];
 
+    const bearishDrivers = [
+        {
+            text: "달러 강세/유동성 압박 확대",
+            met: liquidityTightening,
+            note: liquidityTightening ? "달러 재강세 구간으로 위험자산 할인율 부담이 커집니다." : "달러가 안정되면 하락 전환 압력은 완화됩니다."
+        },
+        {
+            text: "방어 업종 우위로 확산 둔화",
+            met: cyclicalBreadthWeak,
+            note: cyclicalBreadthWeak ? "경기민감 대비 방어 섹터 우위가 확인됩니다." : "경기민감 섹터가 버티면 하락 전환 신호는 약해집니다."
+        },
+        {
+            text: "호재 둔감 자산 확산(매수 피로 누적)",
+            met: goodNewsLaggers.length >= 3,
+            note: goodNewsLaggers.length >= 3
+                ? `호재 둔감 자산 ${goodNewsLaggers.length}개로 가격 전가력이 약해졌습니다.`
+                : "호재 둔감 자산 수가 아직 임계치에 도달하지 않았습니다."
+        }
+    ];
+
+    const invalidationMacroText = regime.tone === "bullish"
+        ? "핵심 매크로 2개 이상 하방 전환"
+        : regime.tone === "bearish"
+            ? "핵심 매크로 2개 이상 상방 전환"
+            : "핵심 매크로가 한 방향으로 급정렬";
+    const invalidationMacroMet = regime.tone === "bullish"
+        ? macroDownCount >= 2
+        : regime.tone === "bearish"
+            ? macroUpCount >= 2
+            : Math.abs(macroScore) >= 4;
+
     const invalidationDrivers = [
-        regime.tone === "bullish" ? "금융주와 반도체가 동시에 상대 강도를 상실" : "신용시장과 리더십이 동시에 회복",
-        normalizedConfidence < 60 ? "핵심 지표가 단기간에 급반전" : "핵심 매크로 2개 이상이 반대 방향으로 전환",
-        "악재 내성 자산이 빠르게 증가하는지 재확인"
+        {
+            text: regime.tone === "bullish" ? "금융주·반도체 동시 리더십 상실" : "신용시장과 반도체 리더십 동시 회복",
+            met: regime.tone === "bullish" ? jointLeadershipLoss : jointRecovery,
+            note: regime.tone === "bullish"
+                ? (jointLeadershipLoss ? "XLF·SOXX가 동시에 약세로 현재 강세 시나리오를 훼손합니다." : "XLF·SOXX 동시 약화 신호는 아직 확인되지 않았습니다.")
+                : (jointRecovery ? "신용과 리더십이 동시에 회복돼 약세 시나리오가 무효화될 수 있습니다." : "신용 또는 리더십 중 하나만 회복된 상태입니다.")
+        },
+        {
+            text: invalidationMacroText,
+            met: invalidationMacroMet,
+            note: regime.tone === "bullish"
+                ? `현재 하방 전환 매크로 ${macroDownCount}/${macroChecks.length}`
+                : regime.tone === "bearish"
+                    ? `현재 상방 전환 매크로 ${macroUpCount}/${macroChecks.length}`
+                    : `중립 구간에서 매크로 점수 ${macroScore > 0 ? "+" : ""}${macroScore}`
+        },
+        {
+            text: "악재 내성 자산 급증 여부 확인",
+            met: badNewsResilient.length >= 3,
+            note: badNewsResilient.length >= 3
+                ? `악재 내성 자산 ${badNewsResilient.length}개로 반전 가능성이 커졌습니다.`
+                : "악재 내성 자산 증가가 아직 빠르게 확산되지는 않았습니다."
+        }
     ];
 
     const riskWarnings = [
@@ -1932,13 +2301,21 @@ function buildMarketIntel() {
         macroChecks.find(item => item.key === "liquidity")?.trend === "down" ? "달러 강세로 유동성 압박이 확대되고 있습니다." : null,
         macroChecks.find(item => item.key === "credit_stress")?.trend === "down" ? "신용시장 긴장이 높아져 주식 강세의 질이 훼손될 수 있습니다." : null,
         goodNewsLaggers.length >= 3 ? "호재에도 가격이 따라오지 않는 자산이 늘어 수급 피로가 누적되고 있습니다." : null
-    ].filter(Boolean).slice(0, 4);
+    ].filter(Boolean).slice(0, 3);
 
     return {
         regime,
         confidence: {
             score: normalizedConfidence,
             label: confidenceLabel
+        },
+        scoreBreakdown: {
+            total: regimeScore,
+            max: maxScore,
+            macro: macroScore,
+            breadth: breadthScore,
+            marker: scoreMarker,
+            contributors: scoreContributors
         },
         macroChecks,
         breadthChecks,
@@ -1960,6 +2337,11 @@ function renderMarketIntel() {
     const intel = buildMarketIntel();
     const todayConclusion = buildTodayConclusion(intel);
     const reliabilityBadges = buildReliabilityBadges();
+    const predictionHistory = syncIntelPredictionHistory();
+    const predictionBadge = buildPredictionPerformanceBadge(predictionHistory);
+    const reliabilityCards = [predictionBadge, ...reliabilityBadges];
+    const executionGuide = buildExecutionGuide(intel);
+    const todayActions = buildTodayActionLines(intel, executionGuide);
 
     const renderSignalItem = item => `
         <div class="regime-pill regime-${item.trend || item.direction}">
@@ -1968,40 +2350,39 @@ function renderMarketIntel() {
         </div>
     `;
 
-    const renderReactionList = (title, subtitle, rows, type) => `
-        <section class="intel-panel">
-            <div class="intel-panel-header">
-                <div>
-                    <h3>${title}</h3>
-                    <p>${subtitle}</p>
-                </div>
-                <span class="intel-tag">${type}</span>
-            </div>
-            <div class="reaction-list">
-                ${rows.length ? rows.map(row => `
-                    <a class="reaction-item" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(row.symbol)}" target="_blank">
-                        <div class="reaction-topline">
-                            <strong>${row.name}</strong>
-                            <span>${row.symbol}</span>
-                        </div>
-                        <div class="reaction-metrics">
-                            <span>1D ${row.idx1D.toFixed(2)}%</span>
-                            <span>5D ${row.idx5D.toFixed(2)}%</span>
-                            <span>YTD ${row.idxYTD.toFixed(2)}%</span>
-                        </div>
-                        <p>${row.note}</p>
-                    </a>
-                `).join("") : '<div class="reaction-empty">현재 조건에 강하게 걸리는 자산이 없습니다.</div>'}
-            </div>
-        </section>
-    `;
+    const renderScenarioList = (title, rows, className) => {
+        const normalizedRows = rows.map(row => {
+            if (typeof row === "string") {
+                return { text: row, met: false, note: "상태 점검 필요" };
+            }
+            return {
+                text: row.text || "",
+                met: Boolean(row.met),
+                note: row.note || ""
+            };
+        });
+        const metCount = normalizedRows.filter(item => item.met).length;
 
-    const renderScenarioList = (title, rows, className) => `
-        <div class="scenario-card ${className}">
-            <span class="scenario-label">${title}</span>
-            ${rows.map(row => `<p>${row}</p>`).join("")}
-        </div>
-    `;
+        return `
+            <div class="scenario-card ${className}">
+                <div class="scenario-head">
+                    <span class="scenario-label">${title}</span>
+                    <span class="scenario-count">${metCount}/${normalizedRows.length} 충족</span>
+                </div>
+                <div class="scenario-checklist">
+                    ${normalizedRows.map(item => `
+                        <div class="scenario-item ${item.met ? "is-met" : "is-pending"}">
+                            <div class="scenario-item-top">
+                                <span class="scenario-state">${item.met ? "충족" : "미충족"}</span>
+                                <strong>${item.text}</strong>
+                            </div>
+                            <p>${item.note}</p>
+                        </div>
+                    `).join("")}
+                </div>
+            </div>
+        `;
+    };
 
     return `
         <section class="regime-board tone-${intel.regime.tone}">
@@ -2026,15 +2407,89 @@ function renderMarketIntel() {
                 <span class="section-kicker">오늘 한 줄 결론</span>
                 <p>${todayConclusion}</p>
             </div>
-
-            <div class="regime-pill-row">
-                ${intel.macroChecks.map(renderSignalItem).join("")}
-            </div>
         </section>
         <section class="scenario-grid">
             ${renderScenarioList("상승 지속 조건", intel.scenarios.bullish, "scenario-bull")}
             ${renderScenarioList("하락 전환 조건", intel.scenarios.bearish, "scenario-bear")}
             ${renderScenarioList("무효화 조건", intel.scenarios.invalidation, "scenario-neutral")}
+        </section>
+        <section class="intel-panel execution-panel">
+            <div class="intel-panel-header">
+                <div>
+                    <h3>실행 가이드 (포지션 운영)</h3>
+                    <p>국면·확신도·리스크 경보를 합산해 비중과 사이징을 자동 제안합니다.</p>
+                </div>
+                <span class="intel-tag">Action</span>
+            </div>
+            <div class="execution-profile-bar">
+                <div class="execution-profile-buttons">
+                    <button type="button" class="execution-profile-btn ${executionGuide.profile.key === "aggressive" ? "active" : ""}" onclick="setIntelRiskProfile('aggressive')">공격</button>
+                    <button type="button" class="execution-profile-btn ${executionGuide.profile.key === "neutral" ? "active" : ""}" onclick="setIntelRiskProfile('neutral')">중립</button>
+                    <button type="button" class="execution-profile-btn ${executionGuide.profile.key === "conservative" ? "active" : ""}" onclick="setIntelRiskProfile('conservative')">보수</button>
+                </div>
+                <p class="execution-profile-note">${executionGuide.profile.note}</p>
+            </div>
+            <div class="execution-topline">
+                <div class="execution-topline-item">
+                    <span>상승 조건</span>
+                    <strong>${executionGuide.scenarioSummary.bullish}</strong>
+                </div>
+                <div class="execution-topline-item">
+                    <span>하락 조건</span>
+                    <strong>${executionGuide.scenarioSummary.bearish}</strong>
+                </div>
+                <div class="execution-topline-item">
+                    <span>무효화 조건</span>
+                    <strong>${executionGuide.scenarioSummary.invalidation}</strong>
+                </div>
+            </div>
+            <div class="execution-action-strip">
+                <div class="execution-action-item">
+                    <span>지금 할 일</span>
+                    <p>${todayActions.doNow}</p>
+                </div>
+                <div class="execution-action-item">
+                    <span>하면 안 되는 일</span>
+                    <p>${todayActions.avoidNow}</p>
+                </div>
+                <div class="execution-action-item">
+                    <span>재확인 시점</span>
+                    <p>${todayActions.recheckWhen}</p>
+                </div>
+            </div>
+            <div class="execution-allocation-grid">
+                <div class="execution-alloc-card alloc-risk">
+                    <div class="execution-alloc-head"><span>리스크 자산</span><strong>${executionGuide.allocation.risk}%</strong></div>
+                    <div class="execution-alloc-meter"><div class="execution-alloc-fill" style="width:${executionGuide.allocation.risk}%"></div></div>
+                </div>
+                <div class="execution-alloc-card alloc-cash">
+                    <div class="execution-alloc-head"><span>현금</span><strong>${executionGuide.allocation.cash}%</strong></div>
+                    <div class="execution-alloc-meter"><div class="execution-alloc-fill" style="width:${executionGuide.allocation.cash}%"></div></div>
+                </div>
+                <div class="execution-alloc-card alloc-hedge">
+                    <div class="execution-alloc-head"><span>헤지</span><strong>${executionGuide.allocation.hedge}%</strong></div>
+                    <div class="execution-alloc-meter"><div class="execution-alloc-fill" style="width:${executionGuide.allocation.hedge}%"></div></div>
+                </div>
+            </div>
+            <div class="execution-rule-grid">
+                <div class="execution-rule-card">
+                    <span class="execution-rule-label">Sizing</span>
+                    <strong>${executionGuide.sizing.title}</strong>
+                    <p>${executionGuide.sizing.desc}</p>
+                </div>
+                <div class="execution-rule-card">
+                    <span class="execution-rule-label">Entry</span>
+                    <p>${executionGuide.entryRule}</p>
+                </div>
+                <div class="execution-rule-card">
+                    <span class="execution-rule-label">Risk</span>
+                    <p>${executionGuide.riskRule}</p>
+                </div>
+                <div class="execution-rule-card">
+                    <span class="execution-rule-label">Hedge</span>
+                    <p>${executionGuide.hedgeRule}</p>
+                </div>
+            </div>
         </section>
         <section class="intel-grid supporting-grid">
             <section class="intel-panel">
@@ -2072,51 +2527,50 @@ function renderMarketIntel() {
                 </div>
             </section>
         </section>
-        <section class="breadth-board">
-            <div class="intel-panel-header">
-                <div>
-                    <h3>리더십·확산 매트릭스</h3>
-                    <p>지수 방향보다 주도 업종의 질과 상승 확산 범위를 점검합니다.</p>
-                </div>
-                <span class="intel-tag">Breadth</span>
-            </div>
-            <div class="breadth-grid">
-                ${intel.breadthChecks.map(item => `
-                    <div class="breadth-card ${item.direction === "up" ? "is-positive" : "is-negative"}">
-                        <span>${item.label}</span>
-                        <strong>${item.score >= 0 ? "+" : ""}${item.score.toFixed(2)}pt</strong>
-                        <p>${item.summary}</p>
+        <section class="intel-panel intel-detail-toggle">
+            <details>
+                <summary>상세 근거 보기 (데이터 신뢰도 / 점수 분해 / 매크로 체크)</summary>
+                <div class="intel-detail-body">
+                    <div class="reliability-grid">
+                        ${reliabilityCards.map(item => `
+                            <div class="reliability-card tone-${item.tone}">
+                                <span class="reliability-label">${item.label}</span>
+                                <strong>${item.status}</strong>
+                                <p>${item.detail}</p>
+                            </div>
+                        `).join("")}
                     </div>
-                `).join("")}
-            </div>
-        </section>
-        <div class="intel-grid">
-            ${renderReactionList("호재 이후 둔화 자산", "기존 성과는 우수하지만 최근 가격 전가력이 둔화된 자산", intel.goodNewsLaggers, "Reaction")}
-            ${renderReactionList("악재 이후 회복 자산", "최근 약세에도 불구하고 단기 반응이 복원되는 자산", intel.badNewsResilient, "Resilience")}
-        </div>
-        <section class="intel-panel contradiction-panel">
-            <div class="intel-panel-header">
-                <div>
-                    <h3>가격-펀더멘털 괴리</h3>
-                    <p>기대와 가격이 엇갈릴 때는 내러티브보다 시장 반응을 우선합니다.</p>
+                    <div class="regime-score-board">
+                        <div class="regime-score-header">
+                            <div class="regime-score-total">
+                                <span class="section-kicker">국면 점수 분해</span>
+                                <strong>${intel.scoreBreakdown.total > 0 ? "+" : ""}${intel.scoreBreakdown.total} / ±${intel.scoreBreakdown.max}</strong>
+                            </div>
+                            <span class="regime-score-sub">Macro ${intel.scoreBreakdown.macro > 0 ? "+" : ""}${intel.scoreBreakdown.macro} · Breadth ${intel.scoreBreakdown.breadth > 0 ? "+" : ""}${intel.scoreBreakdown.breadth}</span>
+                        </div>
+                        <div class="regime-score-meter">
+                            <div class="regime-score-meter-track"></div>
+                            <div class="regime-score-meter-center"></div>
+                            <div class="regime-score-meter-marker" style="left: ${intel.scoreBreakdown.marker}%"></div>
+                        </div>
+                        <div class="regime-score-grid">
+                            ${intel.scoreBreakdown.contributors.map(item => `
+                                <div class="regime-score-item regime-${item.direction}">
+                                    <div class="regime-score-item-top">
+                                        <span class="regime-score-bucket">${item.bucket}</span>
+                                        <strong>${item.contribution > 0 ? "+" : ""}${item.contribution}</strong>
+                                    </div>
+                                    <span class="regime-score-label">${item.label}</span>
+                                    <p>${item.detail}</p>
+                                </div>
+                            `).join("")}
+                        </div>
+                    </div>
+                    <div class="regime-pill-row">
+                        ${intel.macroChecks.map(renderSignalItem).join("")}
+                    </div>
                 </div>
-                <span class="intel-tag">Divergence</span>
-            </div>
-            <div class="contradiction-list">
-                ${intel.fundamentalContradictions.map(row => `
-                    <a class="contradiction-item" href="https://www.tradingview.com/chart/?symbol=${encodeURIComponent(row.symbol)}" target="_blank">
-                        <div>
-                            <strong>${row.name}</strong>
-                            <span>${row.symbol}</span>
-                        </div>
-                        <div class="contradiction-stats">
-                            <span>1M ${row.idxMTD.toFixed(2)}%</span>
-                            <span>5D ${row.idx5D.toFixed(2)}%</span>
-                            <span class="stance">${row.stance}</span>
-                        </div>
-                    </a>
-                `).join("")}
-            </div>
+            </details>
         </section>
     `;
 }
@@ -2364,14 +2818,6 @@ function createCommodityRows(assets) {
 
 function renderIntelView() {
     chartGrid.innerHTML = "";
-
-    const bannerHtml = renderPulseBanner();
-    if (bannerHtml) {
-        const bannerWrapper = document.createElement("div");
-        bannerWrapper.style.display = "contents";
-        bannerWrapper.innerHTML = bannerHtml;
-        Array.from(bannerWrapper.children).forEach(child => chartGrid.appendChild(child));
-    }
 
     const intelHtml = renderMarketIntel();
     if (intelHtml) {
