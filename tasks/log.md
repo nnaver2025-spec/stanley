@@ -61,3 +61,25 @@ Record the runtime validation requested after the atomic `data.js` write change.
 ### Risks / Follow-ups
 - The existing `8080` autostart server was not stopped or modified.
 - BOK ECOS returned a rate-limit message during scraper refresh, but fallback handling completed and `data.js` was still generated.
+
+## 2026-04-17 16:18 KST
+
+### Task
+Add agent configuration files to Git tracking.
+
+### Files changed
+- `.claude/`
+- `.codex/`
+- `AGENT_GUIDE.md`
+- `tasks/log.md`
+
+### Why
+Track the shared agent guide and local agent configuration requested for this repository.
+
+### Verification
+- Confirmed `.codex/config.toml` does not contain obvious secret values.
+- Confirmed `.claude/.DS_Store` is ignored by `.gitignore`.
+- Staged only the requested agent config paths plus this task log entry before committing.
+
+### Risks / Follow-ups
+- No push was performed.

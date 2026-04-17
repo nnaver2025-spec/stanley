@@ -1,0 +1,18 @@
+model = "gpt-5.4"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+web_search = "cached"
+model_reasoning_effort = "high"
+
+[profiles.safe]
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[profiles.fast]
+approval_policy = "never"
+sandbox_mode = "workspace-write"
+
+[profiles.review]
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+model_reasoning_effort = "high"
