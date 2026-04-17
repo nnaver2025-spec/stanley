@@ -87,6 +87,26 @@ Track the shared agent guide and local agent configuration requested for this re
 ## 2026-04-17 16:21 KST
 
 ### Task
+Commit atomic `data.js` write behavior in `scraper.py`.
+
+### Files changed
+- `scraper.py`
+- `tasks/log.md`
+
+### Why
+Preserve the fix that writes dashboard data to a temporary file before replacing `data.js`, preventing readers from seeing a truncated file during refresh.
+
+### Verification
+- Ran `python3 -m py_compile scraper.py`.
+- Previously verified `server.py` served `/data.js` with `HTTP/1.0 200 OK` and parseable `window.DASHBOARD_DATA`.
+
+### Risks / Follow-ups
+- Full scraper behavior still depends on external market-data APIs.
+- No push was performed.
+
+## 2026-04-17 16:21 KST
+
+### Task
 Normalize Claude agent file casing and ignore local-only agent scratch files.
 
 ### Files changed

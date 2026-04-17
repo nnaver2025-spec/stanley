@@ -1857,8 +1857,10 @@ def main():
     js_content = f"window.DASHBOARD_DATA = {json.dumps(output, indent=2)};"
     
     output_path = os.path.join(os.path.dirname(__file__), 'data.js')
-    with open(output_path, 'w') as f:
+    temp_output_path = f"{output_path}.tmp"
+    with open(temp_output_path, 'w', encoding='utf-8') as f:
         f.write(js_content)
+    os.replace(temp_output_path, output_path)
         
     print(f"Successfully wrote data (including CNN F&G: {fng_data['val']}) to {output_path}")
 
