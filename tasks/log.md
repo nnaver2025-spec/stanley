@@ -84,6 +84,30 @@ Track the shared agent guide and local agent configuration requested for this re
 ### Risks / Follow-ups
 - No push was performed.
 
+## 2026-04-17 16:40 KST
+
+### Task
+Track and push all local project files.
+
+### Files changed
+- `.gitignore`
+- `.agents/`
+- `AGENTS.md`
+- `data.js`
+- `task.md`
+- `tasks/log.md`
+
+### Why
+Include local project files that were previously ignored so the GitHub repository reflects the full project state, while continuing to ignore macOS `.DS_Store` metadata files.
+
+### Verification
+- Checked ignored files with `git status --ignored --short`.
+- Removed project-file ignore rules for `.agents/`, `AGENTS.md`, `data.js`, and `task.md`.
+- Kept `.DS_Store` ignored.
+
+### Risks / Follow-ups
+- `data.js` is generated data and may change whenever the scraper runs.
+
 ## 2026-04-17 16:22 KST
 
 ### Task
