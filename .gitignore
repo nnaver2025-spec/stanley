@@ -6,3 +6,6 @@ launchd-server.err.log
 tv_debug*.html
 tv_test*.html
 archive/debug_html/
+.agents/
+AGENTS.md
+task.md

@@ -83,3 +83,24 @@ Track the shared agent guide and local agent configuration requested for this re
 
 ### Risks / Follow-ups
 - No push was performed.
+
+## 2026-04-17 16:21 KST
+
+### Task
+Normalize Claude agent file casing and ignore local-only agent scratch files.
+
+### Files changed
+- `.gitignore`
+- `CLAUDE.md`
+- `tasks/log.md`
+
+### Why
+Keep only the canonical uppercase `CLAUDE.md` path in Git and prevent local agent scratch/config files from appearing as untracked work.
+
+### Verification
+- Renamed tracked `claude.md` to `CLAUDE.md` with `git mv -f`.
+- Added `.agents/`, `AGENTS.md`, and `task.md` to `.gitignore`.
+- Confirmed the cleanup commit was staged separately from the pending `scraper.py` fix.
+
+### Risks / Follow-ups
+- No push was performed.
