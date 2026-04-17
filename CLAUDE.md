@@ -1,52 +1,70 @@
-### Workflow Orchestration
+# CLAUDE.md
 
-### 1. Plan Node Default
-- Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
-- If something goes sideways, STOP and re-plan immediately - don't keep pushing
-- Use plan mode for verification steps, not just building
-- Write detailed specs upfront to reduce ambiguity
+Read `./AGENT_GUIDE.md` first and follow it as the primary project guide.
 
-### 2. Subagent Strategy
-- Use subagents liberally to keep main context window clean
-- Offload research, exploration, and parallel analysis to subagents
-- For complex problems, throw more compute at it via subagents
-- One tack per subagent for focused execution
+## Local project notes
+- Prefer minimal diffs.
+- Prefer targeted tests before full-suite tests.
+- State assumptions explicitly.
+- Do not change unrelated files to "clean things up".
+- For UI work, summarize visible behavior changes.
+- For backend work, summarize endpoint, schema, and rollback impact.
 
-### 3. Self-Improvement Loop
-- After ANY correction from the user: update `tasks/lessons.md` with the pattern
-- Write rules for yourself that prevent the same mistake
-- Ruthlessly iterate on these lessons until mistake rate drops
-- Review lessons at session start for relevant project
+## Repository map
+- Source: project root (`index.html`, `script.js`, `style.css`, `server.py`, `scraper.py`)
+- Generated data: `data.js`
+- Logs and task records: `tasks/`
 
-### 4. Verification Before Done
-- Never mark a task complete without proving it works
-- Diff behavior between main and your changes when relevant
-- Ask yourself: "Would a staff engineer approve this?"
-- Run tests, check logs, demonstrate correctness
+## Working procedure
+1. Read `AGENT_GUIDE.md`
+2. Inspect the relevant code path
+3. Make a short plan for non-trivial work
+4. Edit only directly relevant files
+5. Run the smallest useful validation
+6. Report change summary in the required handoff format
+7. Append a work log entry to `tasks/log.md`
 
-### 5. Demand Elegance (Balanced)
-- For non-trivial changes: pause and ask "is there a more elegant way?"
-- If a fix feels hacky: "Knowing everything I know now, implement the elegant solution"
-- Skip this for simple, obvious fixes - don't over-engineer
-- Challenge your own work before presenting it
+## Logging rule
+After every completed task, append a new entry to `tasks/log.md`.
 
-### 6. Autonomous Bug Fizing
-- When given a bug report: just fix it. Don't ask for hand-holding
-- Point at logs, errors, failing tests - then resolve them
-- Zero context switching required from the user
-- Go fix failing CI tests without being told how
+Use this format:
 
-## Task Management
+## YYYY-MM-DD HH:MM
 
-1. **Plan First**: Write plan to `tasks/todo.md` with checkable items
-2. **Verify Plan**: Check in before starting implementation
-3. **Track Progress**: Mark items complete as you go
-4. **Explain Changes**: High-level summary at each step
-5. **Document Results**: Add review section to `tasks/todo.md`
-6. **Capture Lessons**: Update `tasks/lessons.md` after corrections
+### Task
+<short summary>
 
-## Core Principles
+### Files changed
+- <file 1>
+- <file 2>
 
-- **Simplicity First**: Make every change as simple as possible. Impact minimal code.
-- **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
-- **Minimat Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
+### Why
+<reason for the change>
+
+### Verification
+- <command or manual check>
+- <result>
+
+### Risks / Follow-ups
+- <remaining risk or next step>
+
+Rules:
+- Append only. Do not delete prior entries.
+- If no files were changed, write `Files changed: none`.
+- If verification was not run, state exactly why.
+- Keep entries concise but specific.
+
+## Task playbooks
+- Implementation: `.claude/skills/implement/SKILL.md`
+- Review: `.claude/skills/review/SKILL.md`
+- Testing: `.claude/skills/test/SKILL.md`
+
+## Workflow
+
+For non-trivial tasks:
+- Write plan to `tasks/todo.md` before starting
+
+After every task:
+- Append result to `tasks/log.md`
+
+Do not skip logging.

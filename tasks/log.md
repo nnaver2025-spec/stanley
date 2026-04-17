@@ -84,6 +84,25 @@ Track the shared agent guide and local agent configuration requested for this re
 ### Risks / Follow-ups
 - No push was performed.
 
+## 2026-04-17 16:22 KST
+
+### Task
+Keep canonical `CLAUDE.md` content after removing lowercase `claude.md`.
+
+### Files changed
+- `CLAUDE.md`
+- `tasks/log.md`
+
+### Why
+Preserve the current uppercase Claude guide content now that Git tracks `CLAUDE.md` instead of the lowercase duplicate path.
+
+### Verification
+- Confirmed Git now tracks `CLAUDE.md` and no longer tracks `claude.md`.
+- Confirmed remaining ignored local-only paths do not appear in normal `git status`.
+
+### Risks / Follow-ups
+- No push was performed.
+
 ## 2026-04-17 16:21 KST
 
 ### Task
